@@ -116,5 +116,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dailyredspecial
-          path: web/game/dailyredspecial.gba
+          name: dailyred
+          path: web/game/dailyred.gba
