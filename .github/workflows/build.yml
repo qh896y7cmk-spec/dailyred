@@ -1,4 +1,4 @@
-# Daily Red build — getest op 11 oktober 2026.
+# Daily Red build — getest op 13 oktober 2026 (versie 2: met dagregels).
 # Zet dit bestand in je eigen kopie (fork) van amoi-builds/dailyred als
 # .github/workflows/build.yml, ga naar Actions en klik "Run workflow".
 # Daarna download je bij Artifacts het zip-archief "dailyred", pak je het uit,
@@ -15,6 +15,88 @@ jobs:
 
       - name: Fetch pokefirered and apply the Daily Red patch
         run: bash scripts/get-pokefirered.sh
+
+      - name: Emiles dagpuzzel extras (moeilijkheid, legendary, items)
+        working-directory: pokefirered
+        run: |
+          cat > extras.py <<'PYEOF'
+          #!/usr/bin/env python3
+          # Emiles dagpuzzel: makes the team rules adjustable from the website.
+          # Run from the pokefirered/ folder after the Daily Red patch.
+          import re, sys
+
+          def edit(path, old, new, count=1):
+              s = open(path).read()
+              if s.count(old) != count:
+                  sys.exit(f"extras: pattern not found in {path}: {old[:60]!r}")
+              open(path, 'w').write(s.replace(old, new))
+
+          c = 'src/dailyred.c'
+          edit(c, """    u8 daily;    // TRUE: the website's daily game (one battle, then the game ends)
+              u8 padding[3];
+          };""", """    u8 daily;    // TRUE: the website's daily game (one battle, then the game ends)
+              u8 legendary; // 0 = normal odds, 1 = always one legendary, 2 = never
+              u8 minIv;     // 0 = default, else lowest random IV (max 31)
+              u8 padding;
+              u16 minBst;   // 0 = default, else minimum combined base stat total
+              u16 items[6]; // 0 = random item, else held item for that party slot
+          };""")
+          edit(c, "'C', 'O', 'N', 'F', '-', 'V', '2'", "'C', 'O', 'N', 'F', '-', 'V', '3'")
+          edit(c, "static void InitStatus(u32 seed)", """u8 DailyRed_ConfLegendary(void) { return *(const vu8 *)&gDailyRedRomConfig.legendary; }
+          u8 DailyRed_ConfMinIv(void) { return *(const vu8 *)&gDailyRedRomConfig.minIv; }
+          u16 DailyRed_ConfMinBst(void) { return *(const vu16 *)&gDailyRedRomConfig.minBst; }
+          u16 DailyRed_ConfItem(u8 slot) { return *(const vu16 *)&gDailyRedRomConfig.items[slot]; }
+
+          static void InitStatus(u32 seed)""")
+
+          h = 'include/dailyred.h'
+          edit(h, "// src/dailyred_team.c", """u8 DailyRed_ConfLegendary(void);
+          u8 DailyRed_ConfMinIv(void);
+          u16 DailyRed_ConfMinBst(void);
+          u16 DailyRed_ConfItem(u8 slot);
+
+          // src/dailyred_team.c""")
+
+          t = 'src/dailyred_team.c'
+          edit(t, """    if (TeamRandom(rng) % LEGENDARY_TEAM_ODDS == 0)
+                  species[first++]""", """    u32 minBst = DailyRed_ConfMinBst() ? DailyRed_ConfMinBst() : MIN_TEAM_BASE_STAT_TOTAL;
+              u8 legend = DailyRed_ConfLegendary();
+              bool8 rolled = TeamRandom(rng) % LEGENDARY_TEAM_ODDS == 0;
+
+              if (legend == 1 || (legend == 0 && rolled))
+                  species[first++]""")
+          edit(t, "if (total >= MIN_TEAM_BASE_STAT_TOTAL)", "if (total >= minBst)")
+          edit(t, """    u8 i, iv;
+
+              for (i = 0; i < NUM_STATS; i++)
+              {
+                  iv = MIN_TEAM_IV + TeamRandom(rng) % (MAX_PER_STAT_IVS - MIN_TEAM_IV + 1);""", """    u8 i, iv;
+              u8 minIv = DailyRed_ConfMinIv();
+
+              if (minIv == 0 || minIv > MAX_PER_STAT_IVS)
+                  minIv = MIN_TEAM_IV;
+              for (i = 0; i < NUM_STATS; i++)
+              {
+                  iv = minIv + TeamRandom(rng) % (MAX_PER_STAT_IVS - minIv + 1);""")
+          edit(t, """            FinishTeamMon(&party[i], rngState);
+                  }
+              }
+          }""", """            FinishTeamMon(&party[i], rngState);
+                  }
+              }
+
+              // Emiles dagpuzzel: the website may pick held items per slot.
+              for (i = 0; i < PARTY_SIZE; i++)
+              {
+                  u16 item = DailyRed_ConfItem(i);
+                  if (item != ITEM_NONE && item < ITEMS_COUNT)
+                      SetMonData(&party[i], MON_DATA_HELD_ITEM, &item);
+              }
+          }""")
+          print("extras: applied")
+
+          PYEOF
+          python3 extras.py
 
       - name: Install build tools
         run: |
